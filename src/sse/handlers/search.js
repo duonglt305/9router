@@ -149,7 +149,7 @@ async function handleSingleProviderSearch(body, providerInput, request, apiKey, 
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(providerId, excludeConnectionIds);
+    const credentials = await getProviderCredentials(providerId, excludeConnectionIds, null, { apiKey });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {

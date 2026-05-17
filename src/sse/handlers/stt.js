@@ -44,6 +44,7 @@ export async function handleStt(request) {
 
   const { provider, model } = modelInfo;
   log.info("ROUTING", `Provider: ${provider}, Model: ${model}`);
+    const apiKey = extractApiKey(request);
 
   // noAuth providers
   if (!CREDENTIALED_PROVIDERS.has(provider)) {
@@ -58,7 +59,7 @@ export async function handleStt(request) {
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+      const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { apiKey });
 
     if (!credentials || credentials.allRateLimited) {
       if (credentials?.allRateLimited) {

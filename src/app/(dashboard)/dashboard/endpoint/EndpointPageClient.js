@@ -56,9 +56,14 @@ const CAVEMAN_LEVELS = [
 ];
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
+  const [providerConnections, setProviderConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyAllowedConnectionIds, setNewKeyAllowedConnectionIds] = useState([]);
+  const [showEditKeyModal, setShowEditKeyModal] = useState(false);
+  const [editingKey, setEditingKey] = useState(null);
+  const [editingKeyAllowedConnectionIds, setEditingKeyAllowedConnectionIds] = useState([]);
   const [createdKey, setCreatedKey] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
 
@@ -326,10 +331,17 @@ export default function APIPageClient({ machineId }) {
 
   const fetchData = async () => {
     try {
-      const keysRes = await fetch("/api/keys");
+      const [keysRes, providersRes] = await Promise.all([
+        fetch("/api/keys"),
+        fetch("/api/providers", { cache: "no-store" }),
+      ]);
       const keysData = await keysRes.json();
+      const providersData = await providersRes.json().catch(() => ({}));
       if (keysRes.ok) {
         setKeys(keysData.keys || []);
+      }
+      if (providersRes.ok) {
+        setProviderConnections(providersData.connections || []);
       }
     } catch (error) {
       console.log("Error fetching data:", error);
@@ -685,7 +697,7 @@ export default function APIPageClient({ machineId }) {
       const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newKeyName }),
+        body: JSON.stringify({ name: newKeyName, allowedConnectionIds: newKeyAllowedConnectionIds }),
       });
       const data = await res.json();
 
@@ -693,6 +705,7 @@ export default function APIPageClient({ machineId }) {
         setCreatedKey(data.key);
         await fetchData();
         setNewKeyName("");
+        setNewKeyAllowedConnectionIds([]);
         setShowAddModal(false);
       }
     } catch (error) {
@@ -738,6 +751,36 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
+  const openEditKeyModal = (key) => {
+    setEditingKey(key);
+    setEditingKeyAllowedConnectionIds(key.allowedConnectionIds || []);
+    setShowEditKeyModal(true);
+  };
+
+  const closeEditKeyModal = () => {
+    setShowEditKeyModal(false);
+    setEditingKey(null);
+    setEditingKeyAllowedConnectionIds([]);
+  };
+
+  const handleSaveKeyScope = async () => {
+    if (!editingKey) return;
+    try {
+      const res = await fetch(`/api/keys/${editingKey.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allowedConnectionIds: editingKeyAllowedConnectionIds }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setKeys(prev => prev.map((key) => key.id === editingKey.id ? { ...key, allowedConnectionIds: data.key?.allowedConnectionIds || editingKeyAllowedConnectionIds } : key));
+        closeEditKeyModal();
+      }
+    } catch (error) {
+      console.log("Error updating key scope:", error);
+    }
+  };
+
   const maskKey = (fullKey) => {
     if (!fullKey) return "";
     return fullKey.length > 8 ? fullKey.slice(0, 8) + "..." : fullKey;
@@ -750,6 +793,16 @@ export default function APIPageClient({ machineId }) {
       else next.add(keyId);
       return next;
     });
+  };
+
+  const formatAllowedConnections = (allowedConnectionIds) => {
+    if (!allowedConnectionIds?.length) return "All provider accounts";
+    const names = providerConnections
+      .filter((connection) => allowedConnectionIds.includes(connection.id))
+      .map((connection) => connection.name || connection.displayName || connection.email || connection.id);
+    if (names.length === 0) return `${allowedConnectionIds.length} selected account${allowedConnectionIds.length === 1 ? "" : "s"}`;
+    const shown = names.slice(0, 3).join(", ");
+    return names.length > 3 ? `${shown} +${names.length - 3} more` : shown;
   };
 
   const [baseUrl, setBaseUrl] = useState("/v1");
@@ -1163,6 +1216,9 @@ export default function APIPageClient({ machineId }) {
                   <p className="text-xs text-text-muted mt-1">
                     Created {new Date(key.createdAt).toLocaleDateString()}
                   </p>
+                  <p className="text-xs text-text-muted mt-1">
+                    Scope: {formatAllowedConnections(key.allowedConnectionIds)}
+                  </p>
                   {key.isActive === false && (
                     <p className="text-xs text-orange-500 mt-1">Paused</p>
                   )}
@@ -1188,6 +1244,12 @@ export default function APIPageClient({ machineId }) {
                     title={key.isActive ? "Pause key" : "Resume key"}
                   />
                   <button
+                    onClick={() => openEditKeyModal(key)}
+                    className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                  </button>
+                  <button
                     onClick={() => handleDeleteKey(key.id)}
                     className="p-2 hover:bg-red-500/10 rounded text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
                   >
@@ -1207,6 +1269,7 @@ export default function APIPageClient({ machineId }) {
         onClose={() => {
           setShowAddModal(false);
           setNewKeyName("");
+          setNewKeyAllowedConnectionIds([]);
         }}
       >
         <div className="flex flex-col gap-4">
@@ -1216,6 +1279,53 @@ export default function APIPageClient({ machineId }) {
             onChange={(e) => setNewKeyName(e.target.value)}
             placeholder="Production Key"
           />
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">Allowed provider accounts</p>
+                <p className="text-xs text-text-muted">Leave empty to allow all accounts.</p>
+              </div>
+              {newKeyAllowedConnectionIds.length > 0 && (
+                <button
+                  type="button"
+                  className="text-xs text-primary hover:underline"
+                  onClick={() => setNewKeyAllowedConnectionIds([])}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="max-h-56 overflow-auto rounded-lg border border-border bg-surface/60 p-3">
+              {providerConnections.length === 0 ? (
+                <p className="text-sm text-text-muted">No provider accounts found yet.</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {providerConnections.map((connection) => {
+                    const checked = newKeyAllowedConnectionIds.includes(connection.id);
+                    return (
+                      <label key={connection.id} className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setNewKeyAllowedConnectionIds((prev) => {
+                              if (e.target.checked) return [...prev, connection.id];
+                              return prev.filter((id) => id !== connection.id);
+                            });
+                          }}
+                          className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">{connection.name || connection.displayName || connection.email || connection.id}</p>
+                          <p className="text-xs text-text-muted truncate">{connection.provider}</p>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
           <div className="flex gap-2">
             <Button onClick={handleCreateKey} fullWidth disabled={!newKeyName.trim()}>
               Create
@@ -1224,10 +1334,63 @@ export default function APIPageClient({ machineId }) {
               onClick={() => {
                 setShowAddModal(false);
                 setNewKeyName("");
+                setNewKeyAllowedConnectionIds([]);
               }}
               variant="ghost"
               fullWidth
             >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Edit Key Scope Modal */}
+      <Modal
+        isOpen={showEditKeyModal}
+        title={`Edit ${editingKey?.name || "API Key"}`}
+        onClose={closeEditKeyModal}
+      >
+        <div className="flex flex-col gap-4">
+          <div>
+            <p className="text-sm font-medium">Allowed provider accounts</p>
+            <p className="text-xs text-text-muted">Leave empty to allow all accounts.</p>
+          </div>
+          <div className="max-h-56 overflow-auto rounded-lg border border-border bg-surface/60 p-3">
+            {providerConnections.length === 0 ? (
+              <p className="text-sm text-text-muted">No provider accounts found yet.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {providerConnections.map((connection) => {
+                  const checked = editingKeyAllowedConnectionIds.includes(connection.id);
+                  return (
+                    <label key={connection.id} className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          setEditingKeyAllowedConnectionIds((prev) => {
+                            if (e.target.checked) return [...prev, connection.id];
+                            return prev.filter((id) => id !== connection.id);
+                          });
+                        }}
+                        className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate">{connection.name || connection.displayName || connection.email || connection.id}</p>
+                        <p className="text-xs text-text-muted truncate">{connection.provider}</p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={handleSaveKeyScope} fullWidth>
+              Save Changes
+            </Button>
+            <Button onClick={closeEditKeyModal} variant="ghost" fullWidth>
               Cancel
             </Button>
           </div>

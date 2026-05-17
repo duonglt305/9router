@@ -1,4 +1,4 @@
-import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings } from "@/lib/localDb";
+import { getProviderConnections, validateApiKey, getApiKeyByKey, updateProviderConnection, getSettings } from "@/lib/localDb";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
@@ -21,6 +21,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     ? excludeConnectionIds
     : (excludeConnectionIds ? new Set([excludeConnectionIds]) : new Set());
   const preferredConnectionId = options?.preferredConnectionId || null;
+  const apiKey = options?.apiKey || null;
   // Acquire mutex to prevent race conditions
   const currentMutex = selectionMutex;
   let resolveMutex;
@@ -55,6 +56,15 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const connections = await getProviderConnections({ provider: providerId, isActive: true });
     log.debug("AUTH", `${provider} | total connections: ${connections.length}, excludeIds: ${excludeSet.size > 0 ? [...excludeSet].join(",") : "none"}, model: ${model || "any"}`);
 
+    let apiKeyScope = null;
+    if (apiKey) {
+      const apiKeyRecord = await getApiKeyByKey(apiKey);
+      apiKeyScope = apiKeyRecord?.allowedConnectionIds?.length ? new Set(apiKeyRecord.allowedConnectionIds) : null;
+      if (apiKeyScope) {
+        log.debug("AUTH", `${provider} | api key scope: ${[...apiKeyScope].join(",")}`);
+      }
+    }
+
     if (connections.length === 0) {
       log.warn("AUTH", `No credentials for ${provider}`);
       return null;
@@ -64,6 +74,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const availableConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
+      if (apiKeyScope && !apiKeyScope.has(c.id)) return false;
       return true;
     });
 
@@ -78,6 +89,10 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     });
 
     if (availableConnections.length === 0) {
+      if (apiKeyScope) {
+        log.warn("AUTH", `${provider} | api key does not grant access to any available accounts`);
+        return null;
+      }
       // Find earliest lock expiry across all connections for retry timing
       const lockedConns = connections.filter(c => isModelLockActive(c, model));
       const expiries = lockedConns.map(c => getEarliestModelLockUntil(c)).filter(Boolean);
